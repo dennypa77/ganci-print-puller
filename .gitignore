@@ -1,0 +1,9 @@
+# Rahasia + setting per-mesin — JANGAN commit (berisi jwt_secret + path lokal).
+config.json
+
+# Output lokal hasil tarik
+output/
+*.cdr
+
+__pycache__/
+*.pyc

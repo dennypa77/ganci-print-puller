@@ -1,0 +1,3 @@
+# GUI saja (gui.py / settings.py). CLI (main.py) & bridge (server.py) stdlib-only.
+# Tidak butuh pypdf — file .cdr disalin apa adanya (tanpa ekstraksi halaman).
+customtkinter>=5.2

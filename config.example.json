@@ -1,0 +1,8 @@
+{
+  "vps_db_url": "https://db.erp-hog.com",
+  "jwt_secret": "ISI_DENGAN_VPS_DB_JWT_SECRET",
+  "jwt_role": "service_role",
+  "master_folder": "G:\\My Drive\\Design_Keychain\\03_Upload_Marketplace\\siap cetak",
+  "hot_folder": "E:\\Project\\ganci-print-puller\\output",
+  "bridge_port": 8767
+}
