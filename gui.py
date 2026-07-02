@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import traceback
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+import updater
 import version
 from erp_client import ErpClient
 from main import run_pull
@@ -41,6 +43,9 @@ class PullerApp(ctk.CTk):
         self._build_settings(self.tabs.add("Pengaturan"))
         self._build_run(self.tabs.add("Eksekusi & Log"))
         self.tabs.set("Eksekusi & Log" if all(self.cfg.get(k) for k in REQUIRED) else "Pengaturan")
+
+        # Notifikasi one-shot bila baru saja auto-update saat launch (via updater.py).
+        self.after(400, self._notify_if_updated)
 
     # ---------------------------------------------------------------- settings
     def _row(self, parent, label: str):
@@ -185,6 +190,16 @@ class PullerApp(ctk.CTk):
             hover_color="#4b5563",
             command=self._open_output,
         ).pack(side="left", padx=6)
+        self.btn_update = ctk.CTkButton(
+            top,
+            text="🔄  Perbarui",
+            height=48,
+            width=110,
+            fg_color="#2563eb",
+            hover_color="#1d4ed8",
+            command=self._check_update,
+        )
+        self.btn_update.pack(side="right", padx=6)
 
         self.lbl_summary = ctk.CTkLabel(
             p,
@@ -205,6 +220,61 @@ class PullerApp(ctk.CTk):
             os.startfile(hot)  # noqa: SLF001 — Windows-only, sesuai target operator
         else:
             self._emit("Folder hasil belum ada / belum di-set (cek tab Pengaturan).")
+
+    # ---------------------------------------------------------------- update
+    def _notify_if_updated(self) -> None:
+        """Tampilkan notifikasi sekali kalau updater.py baru saja auto-update."""
+        info = updater.consume_update_flag()
+        if info:
+            self.lbl_summary.configure(
+                text=f"✓ Aplikasi diperbarui {info['old_version']} → {info['new_version']}.",
+                text_color="#16a34a",
+            )
+
+    def _restart(self) -> None:
+        """Restart proses Python dengan argumen yang sama (muat kode terbaru)."""
+        os.execl(sys.executable, sys.executable, *sys.argv)
+
+    def _check_update(self) -> None:
+        """Cek & apply update manual (tombol Perbarui) di thread background."""
+        self.btn_update.configure(state="disabled", text="Mengecek…")
+        self.lbl_summary.configure(text="Memeriksa update dari GitHub…", text_color="#2563eb")
+
+        def work() -> None:
+            res = updater.check_and_update()
+            self.after(0, lambda: self._after_update(res))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _after_update(self, res: "updater.UpdateResult") -> None:
+        self.btn_update.configure(state="normal", text="🔄  Perbarui")
+        if res.status == "updated":
+            updater.write_update_flag(res)
+            self.lbl_summary.configure(
+                text=f"✓ Update {res.old_version} → {res.new_version}. Restart aplikasi…",
+                text_color="#16a34a",
+            )
+            if messagebox.askyesno(
+                "Update Berhasil",
+                f"Aplikasi diperbarui {res.old_version} → {res.new_version}.\n"
+                "Restart sekarang untuk memuat versi baru?",
+            ):
+                self._restart()
+        elif res.status == "current":
+            self.lbl_summary.configure(
+                text=f"✓ Sudah versi terbaru ({res.old_version}).", text_color="#16a34a"
+            )
+        elif res.status == "no-internet":
+            self.lbl_summary.configure(
+                text="✗ Tidak bisa konek GitHub. Cek koneksi internet.", text_color="#dc2626"
+            )
+        elif res.status == "no-git":
+            self.lbl_summary.configure(
+                text="✗ Bukan git repo — update otomatis tak tersedia (salin manual).",
+                text_color="#dc2626",
+            )
+        else:
+            self.lbl_summary.configure(text=f"✗ Gagal update: {res.message}", text_color="#dc2626")
 
     def _run(self) -> None:
         cfg = self._collect()

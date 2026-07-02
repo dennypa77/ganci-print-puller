@@ -60,6 +60,27 @@ terbuka. Di halaman **Operator Print GK** ERP, tombol **"Tarik Desain (.cdr)"** 
 | `GET /health` | cek bridge hidup (dipakai tombol sebelum kirim) |
 | `POST /pull` | jalankan pull+salin, balas ringkasan JSON |
 
+## Update aplikasi
+
+Aplikasi ini **auto-update** dari GitHub (`git pull`), asal komputer operator
+meng-**clone** repo ini (bukan salin manual) dan punya `git` di PATH.
+
+- **Saat launch** — `gui.bat` / `start.bat` menjalankan `updater.py` dulu: kalau ada
+  versi baru di `origin/main`, otomatis `git pull --rebase --autostash` (config.json
+  aman, gitignored). Notifikasi "Aplikasi diperbarui vX → vY" muncul di GUI.
+- **Manual** — tombol **"🔄 Perbarui"** di tab Eksekusi & Log: cek + apply update, lalu
+  tawarkan restart.
+
+Kalau bukan git repo / tanpa internet, app tetap jalan dengan versi lokal.
+
+Pertama kali di komputer operator:
+
+```bat
+git clone https://github.com/dennypa77/ganci-print-puller.git
+cd ganci-print-puller
+pip install -r requirements.txt
+```
+
 ## Catatan teknis
 
 - **Dependency minim**: JWT di-mint pakai stdlib (`hmac`/`hashlib`), HTTP `urllib`,
