@@ -93,7 +93,10 @@ def run_pull(cfg: dict, emit: Callable[[str], None] = print) -> dict[str, Any]:
             ),
         }
 
-    # Konsolidasi per SKU charm L (jumlahkan pcs kalau ada job ganda untuk item sama).
+    # Expand tiap job → file-key anggota, lalu konsolidasi per key.
+    # Bundle (S/M/BS) → N desain anggota di ukuran itu (mis. SET-5521-5525-M →
+    # GK-ATM-0005521-M .. -0005525-M). Tunggal (L) → 1 key. pcs bundle berlaku
+    # per anggota (1 bundle = 1 charm tiap anggota).
     by_sku: dict[str, dict] = {}
     for job in jobs:
         item = job.get("item") or {}
@@ -106,8 +109,13 @@ def run_pull(cfg: dict, emit: Callable[[str], None] = print) -> dict[str, Any]:
         if pcs <= 0:
             warnings.append(f"[{sku}] jumlah_pcs_target={pcs} → dilewati.")
             continue
-        ent = by_sku.setdefault(sku, {"sku": sku, "name": name, "pcs": 0})
-        ent["pcs"] += pcs
+        keys = duplicate.resolve_cdr_keys(sku)
+        if not keys:
+            fail(f"SKU {sku}: gagal resolve komponen bundle (format range tak terbaca).")
+            continue
+        for k in keys:
+            ent = by_sku.setdefault(k, {"sku": k.upper(), "name": name, "pcs": 0, "src": sku})
+            ent["pcs"] += pcs
 
     emit("Membuat index file master .cdr...")
     index = duplicate.build_file_index(master_folder)
@@ -123,26 +131,29 @@ def run_pull(cfg: dict, emit: Callable[[str], None] = print) -> dict[str, Any]:
     total_pcs = 0
     ok_designs = 0
 
-    for idx, (sku, ent) in enumerate(sorted(by_sku.items()), start=1):
-        found = duplicate.find_cdr(index, sku)
+    for idx, (key, ent) in enumerate(sorted(by_sku.items()), start=1):
+        disp = ent["sku"]
+        src = ent.get("src", disp)
+        origin = "" if src.upper() == disp else f" [bundle {src}]"
+        found = duplicate.find_cdr(index, key)
         if not found:
             fail(
-                f"SKU {sku} ({ent['name']}): file '{sku}.cdr' TIDAK ADA di folder "
+                f"SKU {disp}{origin}: file '{disp}.cdr' TIDAK ADA di folder "
                 f"master ({master_folder})."
             )
             continue
         try:
             dest = duplicate.copy_cdr(found, hot_folder)
             manifest_rows.append(
-                {"sku": sku, "name": ent["name"], "pcs": ent["pcs"], "file": os.path.basename(dest)}
+                {"sku": disp, "name": ent["name"], "pcs": ent["pcs"], "file": os.path.basename(dest)}
             )
             total_pcs += ent["pcs"]
             ok_designs += 1
-            emit(f"  [{idx:03d}] {sku} → {ent['pcs']} pcs → {os.path.basename(dest)}")
+            emit(f"  [{idx:03d}] {disp}{origin} → {ent['pcs']} pcs → {os.path.basename(dest)}")
         except Exception as e:  # noqa: BLE001
             tb = traceback.format_exc().strip().replace("\n", "\n      ")
             fail(
-                f"SKU {sku} ({ent['name']}): gagal salin '{os.path.basename(found)}' "
+                f"SKU {disp}{origin}: gagal salin '{os.path.basename(found)}' "
                 f"— {type(e).__name__}: {e}\n      Trace: {tb}"
             )
 

@@ -88,15 +88,16 @@ class ErpClient:
         """Ambil gk_print_jobs yang SEDANG DIPROSES (status='in_progress') — yaitu
         batch yang sudah DIKLAIM operator di Operator Print GK. BUKAN semua 'pending'.
 
-        Catatan: sejak bundle expansion (WS-A), tiap gk_print_jobs sudah merujuk ke
-        item charm L INDIVIDUAL (mis. sku 'GK-ATM-0003271-L'), 1 row per charm.
-        Jadi item.sku langsung dipakai mencari file <sku>.cdr di folder master.
+        Catatan: gk_print_jobs merujuk ke item PESANAN apa adanya — bisa charm L
+        tunggal (mis. 'GK-ATM-0003271-L') ATAU bundle (mis. 'GK-ATM-SET-5521-5525-M').
+        Bundle TIDAK di-expand di ERP; puller yang meng-expand ke desain anggota di
+        ukurannya (lihat duplicate.resolve_cdr_keys) lalu cari <desain>-<ukuran>.cdr.
 
         Bentuk tiap baris:
           {
             "id": "...",
             "jumlah_pcs_target": 10,
-            "item": {"sku": "GK-ATM-0003271-L", "name": "..."} | None
+            "item": {"sku": "GK-ATM-SET-5521-5525-M", "name": "..."} | None
           }
         """
         query = {
