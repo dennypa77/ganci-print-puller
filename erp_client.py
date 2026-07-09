@@ -67,22 +67,40 @@ class ErpClient:
         self.jwt_role = jwt_role
         self.timeout = timeout
 
-    def _get(self, path: str, query: dict[str, str]) -> Any:
+    def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         token = mint_jwt(self.jwt_secret, self.jwt_role)
+        h = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        if extra:
+            h.update(extra)
+        return h
+
+    def _get(self, path: str, query: dict[str, str]) -> Any:
         url = f"{self.base_url}/{path.lstrip('/')}?{urllib.parse.urlencode(query)}"
-        req = urllib.request.Request(
-            url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-            },
-        )
+        req = urllib.request.Request(url, headers=self._headers())
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:500]
             raise RuntimeError(f"PostgREST {e.code} saat GET {path}: {detail}") from e
+
+    def _send(self, method: str, path: str, body: Any) -> Any:
+        """POST/PATCH JSON ke PostgREST (untuk RPC + update status-tarik)."""
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            method=method,
+            headers=self._headers({"Content-Type": "application/json"}),
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw.strip() else None
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:500]
+            raise RuntimeError(f"PostgREST {e.code} saat {method} {path}: {detail}") from e
 
     def fetch_active_print_jobs(self) -> list[dict[str, Any]]:
         """Ambil gk_print_jobs yang SEDANG DIPROSES (status='in_progress') — yaitu
@@ -110,3 +128,43 @@ class ErpClient:
 
     # Alias kompatibilitas (tab Setting memanggil ini saat Test Koneksi).
     fetch_pending_print_jobs = fetch_active_print_jobs
+
+    # ── Tarik SEBAGIAN + progres lintas-komputer (menulis status-tarik ke DB) ──
+
+    def claim_jobs(self, target_charms: int, worker: str) -> list[dict[str, Any]]:
+        """Klaim N charm berikutnya yang BELUM ditarik (atomik di DB, aman rebutan).
+
+        Balas daftar job yang berhasil diklaim komputer ini:
+          [{job_id, sku, item_name, jumlah_pcs_target, charms}, ...]
+        Kosong = tidak ada charm baru (mungkin sudah 100% atau belum ada batch
+        in_progress). Menarik desain UTUH → total charm bisa sedikit > target.
+        """
+        rows = self._send(
+            "POST",
+            "rpc/claim_gk_print_jobs",
+            {"p_target_charms": int(target_charms), "p_worker": str(worker)[:120]},
+        )
+        return rows if isinstance(rows, list) else []
+
+    def fetch_pull_progress(self) -> dict[str, int]:
+        """Progres tarik semua job in_progress: {total_jobs, pulled_jobs,
+        total_charms, pulled_charms}."""
+        rows = self._send("POST", "rpc/gk_pull_progress", {})
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            r = rows[0]
+            return {
+                "total_jobs": int(r.get("total_jobs") or 0),
+                "pulled_jobs": int(r.get("pulled_jobs") or 0),
+                "total_charms": int(r.get("total_charms") or 0),
+                "pulled_charms": int(r.get("pulled_charms") or 0),
+            }
+        return {"total_jobs": 0, "pulled_jobs": 0, "total_charms": 0, "pulled_charms": 0}
+
+    def reset_pull(self) -> None:
+        """Reset status-tarik SEMUA job in_progress (pulled_at→null). Untuk pemulihan
+        (mis. mau tarik ulang dari awal). TIDAK mengubah status job."""
+        self._send(
+            "PATCH",
+            "gk_print_jobs?status=eq.in_progress",
+            {"pulled_at": None, "pulled_by": None},
+        )

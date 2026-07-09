@@ -17,7 +17,7 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from main import load_config, run_pull
+from main import load_config, run_pull_claim, worker_name
 from version import __version__
 
 ALLOWED_ORIGINS = {
@@ -74,8 +74,20 @@ class Handler(BaseHTTPRequestHandler):
             self._json(409, {"ok": False, "error": "Pull lain sedang berjalan."})
             return
         try:
+            # Body opsional {"charms": N} → klaim N charm. Tanpa itu → semua sisa.
+            target = 10_000_000
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length > 0:
+                    body = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                    if isinstance(body, dict) and body.get("charms"):
+                        target = max(1, int(body["charms"]))
+            except Exception:  # noqa: BLE001
+                pass
             cfg = load_config()
-            summary = run_pull(cfg, emit=lambda m: print(m, flush=True))
+            summary = run_pull_claim(
+                cfg, target, emit=lambda m: print(m, flush=True), worker=worker_name(cfg)
+            )
             self._json(200, summary)
         except Exception as e:  # noqa: BLE001
             self._json(500, {"ok": False, "error": str(e)})

@@ -4,5 +4,6 @@
   "jwt_role": "service_role",
   "master_folder": "G:\\My Drive\\Design_Keychain\\03_Upload_Marketplace\\siap cetak",
   "hot_folder": "E:\\Project\\ganci-print-puller\\output",
-  "bridge_port": 8767
+  "bridge_port": 8767,
+  "worker_name": ""
 }

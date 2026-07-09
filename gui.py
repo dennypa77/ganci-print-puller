@@ -21,7 +21,7 @@ import customtkinter as ctk
 import updater
 import version
 from erp_client import ErpClient
-from main import run_pull
+from main import run_pull_claim, worker_name
 from settings import CONFIG_PATH, load_existing
 
 ctk.set_appearance_mode("System")
@@ -97,6 +97,14 @@ class PullerApp(ctk.CTk):
         self.e_port.pack(side="left", padx=10)
         self.e_port.insert(0, str(self.cfg.get("bridge_port", 8767)))
 
+        f = self._row(p, "Nama Komputer")
+        self.e_worker = ctk.CTkEntry(f)
+        self.e_worker.pack(side="left", fill="x", expand=True, padx=10)
+        self.e_worker.insert(0, self.cfg.get("worker_name", ""))
+        ctk.CTkLabel(f, text="(penanda 'ditarik oleh'; kosong = otomatis)", anchor="w").pack(
+            side="left", padx=6
+        )
+
         btns = ctk.CTkFrame(p)
         btns.pack(fill="x", padx=12, pady=12)
         ctk.CTkButton(btns, text="Test Koneksi", command=self._test).pack(side="left", padx=6)
@@ -129,6 +137,7 @@ class PullerApp(ctk.CTk):
             "master_folder": self.e_master.get().strip(),
             "hot_folder": self.e_hot.get().strip(),
             "bridge_port": _int(self.e_port.get(), 8767),
+            "worker_name": self.e_worker.get().strip(),
         }
 
     def _save(self) -> None:
@@ -172,44 +181,85 @@ class PullerApp(ctk.CTk):
 
     # ------------------------------------------------------------------- run
     def _build_run(self, p) -> None:
+        # Baris aksi tarik.
         top = ctk.CTkFrame(p)
-        top.pack(fill="x", padx=12, pady=12)
+        top.pack(fill="x", padx=12, pady=(12, 6))
+        ctk.CTkLabel(top, text="Tarik", anchor="w").pack(side="left", padx=(10, 4))
+        self.e_charms = ctk.CTkEntry(top, width=70)
+        self.e_charms.pack(side="left")
+        self.e_charms.insert(0, "50")
+        ctk.CTkLabel(top, text="charm", anchor="w").pack(side="left", padx=(4, 10))
         self.btn_run = ctk.CTkButton(
             top,
-            text="⬇  Tarik Desain & Salin",
-            height=48,
-            font=("Segoe UI", 15, "bold"),
-            command=self._run,
+            text="⬇  Tarik Sebagian",
+            height=44,
+            font=("Segoe UI", 14, "bold"),
+            command=self._run_partial,
         )
         self.btn_run.pack(side="left", padx=6)
-        ctk.CTkButton(
+        self.btn_run_all = ctk.CTkButton(
             top,
-            text="Buka Folder Output",
-            height=48,
-            fg_color="#6b7280",
-            hover_color="#4b5563",
-            command=self._open_output,
-        ).pack(side="left", padx=6)
+            text="⬇⬇  Tarik Semua Sisa",
+            height=44,
+            fg_color="#0e7490",
+            hover_color="#155e75",
+            command=self._run_all_remaining,
+        )
+        self.btn_run_all.pack(side="left", padx=6)
         self.btn_update = ctk.CTkButton(
             top,
             text="🔄  Perbarui",
-            height=48,
-            width=110,
+            height=44,
+            width=100,
             fg_color="#2563eb",
             hover_color="#1d4ed8",
             command=self._check_update,
         )
         self.btn_update.pack(side="right", padx=6)
 
+        # Baris progres batch (lintas-komputer).
+        prog = ctk.CTkFrame(p)
+        prog.pack(fill="x", padx=12, pady=(0, 6))
+        self.lbl_progress = ctk.CTkLabel(
+            prog, text="Progres batch: —", font=("Segoe UI", 13, "bold"), anchor="w"
+        )
+        self.lbl_progress.pack(side="left", padx=(10, 8))
+        self.bar_progress = ctk.CTkProgressBar(prog, width=220)
+        self.bar_progress.set(0)
+        self.bar_progress.pack(side="left", padx=8)
+        ctk.CTkButton(prog, text="↻ Refresh", width=84, command=self._refresh_progress).pack(
+            side="left", padx=6
+        )
+        ctk.CTkButton(
+            prog,
+            text="Buka Folder",
+            width=100,
+            fg_color="#6b7280",
+            hover_color="#4b5563",
+            command=self._open_output,
+        ).pack(side="left", padx=6)
+        ctk.CTkButton(
+            prog,
+            text="Reset Tarik",
+            width=100,
+            fg_color="#b91c1c",
+            hover_color="#991b1b",
+            command=self._reset_pull,
+        ).pack(side="right", padx=6)
+
         self.lbl_summary = ctk.CTkLabel(
             p,
-            text="Siap. 1 file .cdr per desain disalin + manifest jumlah pcs.",
+            text="Isi jumlah charm lalu 'Tarik Sebagian' — banyak komputer bisa bagi beban tanpa dobel.",
             font=("Segoe UI", 13),
         )
         self.lbl_summary.pack(fill="x", padx=16, pady=(0, 6))
 
         self.log = ctk.CTkTextbox(p, font=("Consolas", 12))
         self.log.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        # Muat progres awal (sekali) kalau setting lengkap.
+        if all(self.cfg.get(k) for k in REQUIRED):
+            self.after(600, self._refresh_progress)
 
     def _emit(self, msg: str) -> None:
         self.after(0, lambda: (self.log.insert("end", msg + "\n"), self.log.see("end")))
@@ -276,25 +326,98 @@ class PullerApp(ctk.CTk):
         else:
             self.lbl_summary.configure(text=f"✗ Gagal update: {res.message}", text_color="#dc2626")
 
-    def _run(self) -> None:
+    def _set_progress(self, prog: dict) -> None:
+        total = int(prog.get("total_charms") or 0)
+        pulled = int(prog.get("pulled_charms") or 0)
+        sisa = max(0, total - pulled)
+        frac = (pulled / total) if total > 0 else 0
+        pct = round(frac * 100)
+        self.bar_progress.set(frac)
+        if total == 0:
+            txt = "Progres batch: belum ada batch in_progress"
+            color = "#6b7280"
+        elif sisa == 0:
+            txt = f"Progres batch: {pulled}/{total} charm — SELESAI 100% ✓"
+            color = "#16a34a"
+        else:
+            txt = f"Progres batch: {pulled}/{total} charm ({pct}%) · sisa {sisa}"
+            color = "#2563eb"
+        self.lbl_progress.configure(text=txt, text_color=color)
+
+    def _refresh_progress(self) -> None:
+        cfg = self._collect()
+        if not cfg.get("vps_db_url") or not cfg.get("jwt_secret"):
+            return
+
+        def work() -> None:
+            try:
+                prog = ErpClient(cfg["vps_db_url"], cfg["jwt_secret"], cfg["jwt_role"]).fetch_pull_progress()
+                self.after(0, lambda: self._set_progress(prog))
+            except Exception as e:  # noqa: BLE001
+                err = str(e)
+                self.after(0, lambda: self.lbl_progress.configure(text=f"Progres: ✗ {err}", text_color="#dc2626"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _reset_pull(self) -> None:
+        if not messagebox.askyesno(
+            "Reset Status Tarik",
+            "Reset penanda 'sudah ditarik' untuk SEMUA batch in_progress?\n\n"
+            "Setelah ini semua charm dianggap belum ditarik (bisa ditarik ulang dari awal).\n"
+            "Status job (pending/in_progress/done) TIDAK berubah.",
+        ):
+            return
+        cfg = self._collect()
+
+        def work() -> None:
+            try:
+                ErpClient(cfg["vps_db_url"], cfg["jwt_secret"], cfg["jwt_role"]).reset_pull()
+                self._emit("Status tarik di-reset — semua charm dianggap belum ditarik.")
+                self.after(0, self._refresh_progress)
+            except Exception as e:  # noqa: BLE001
+                err = str(e)
+                self._emit(f"GAGAL reset: {err}")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _run_partial(self) -> None:
+        try:
+            target = int(self.e_charms.get().strip())
+        except ValueError:
+            target = 0
+        if target <= 0:
+            self._emit("Isi jumlah charm (angka > 0) dulu.")
+            return
+        self._do_pull(target)
+
+    def _run_all_remaining(self) -> None:
+        # Target sangat besar → klaim semua sisa yang belum ditarik.
+        self._do_pull(10_000_000)
+
+    def _do_pull(self, target: int) -> None:
         cfg = self._collect()
         miss = [k for k in REQUIRED if not cfg[k]]
         if miss:
             self._emit("Setting belum lengkap: " + ", ".join(miss) + " — buka tab Pengaturan.")
             self.tabs.set("Pengaturan")
             return
-        self.btn_run.configure(state="disabled", text="Memproses…")
+        self.btn_run.configure(state="disabled")
+        self.btn_run_all.configure(state="disabled")
         self.log.delete("1.0", "end")
-        self.lbl_summary.configure(text="Memproses…", text_color="#2563eb")
+        self.lbl_summary.configure(text="Mengklaim & menyalin…", text_color="#2563eb")
 
         def work() -> None:
             try:
-                summary = run_pull(cfg, emit=self._emit)
+                summary = run_pull_claim(cfg, target, emit=self._emit, worker=worker_name(cfg))
+                prog = summary.get("progress")
                 self.after(
                     0,
-                    lambda: self.lbl_summary.configure(
-                        text=summary["message"],
-                        text_color="#16a34a" if not summary.get("fails") else "#d97706",
+                    lambda: (
+                        self.lbl_summary.configure(
+                            text=summary["message"],
+                            text_color="#16a34a" if not summary.get("fails") else "#d97706",
+                        ),
+                        self._set_progress(prog) if prog else None,
                     ),
                 )
             except Exception as e:  # noqa: BLE001
@@ -309,7 +432,10 @@ class PullerApp(ctk.CTk):
             finally:
                 self.after(
                     0,
-                    lambda: self.btn_run.configure(state="normal", text="⬇  Tarik Desain & Salin"),
+                    lambda: (
+                        self.btn_run.configure(state="normal"),
+                        self.btn_run_all.configure(state="normal"),
+                    ),
                 )
 
         threading.Thread(target=work, daemon=True).start()

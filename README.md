@@ -46,8 +46,23 @@ klik **Test Koneksi**, lalu **Simpan**. `config.json` dibuat otomatis (gitignore
 
 ## Jalankan
 
-**A. GUI (disarankan)** — `gui.bat`: dua tab (Pengaturan + Eksekusi & Log). Tombol
-**"Tarik Desain & Salin"** + log + **"Buka Folder Output"**.
+**A. GUI (disarankan)** — `gui.bat`: dua tab (Pengaturan + Eksekusi & Log).
+- Isi **jumlah charm** lalu **"Tarik Sebagian"** — klaim N charm berikutnya yang
+  belum ditarik (desain UTUH, jadi total bisa sedikit > N). Atau **"Tarik Semua
+  Sisa"** untuk ambil semua yang belum ditarik.
+- **Progres batch** (bar + `X/Y charm · sisa Z`) menandakan berapa yang sudah
+  ditarik lintas-komputer. **↻ Refresh** untuk memperbarui, **Reset Tarik** untuk
+  menganggap semua belum ditarik (pemulihan).
+- Isi **Nama Komputer** di Pengaturan (penanda "ditarik oleh"; kosong = hostname).
+
+### Tarik SEBAGIAN (banyak komputer)
+
+Beberapa komputer print bisa membagi satu batch tanpa dobel: mis. 100 charm →
+KOMP-1 klik "Tarik 50" (dapat charm 1-50), KOMP-2 klik "Tarik 50" (sisa 51-100).
+Klaim **atomik** di DB (`FOR UPDATE SKIP LOCKED`) — dua komputer tak akan menarik
+job yang sama. Status **JOB** (pending/in_progress/done) tetap dipegang web; tool
+hanya menandai kolom `pulled_at` (status-tarik). Batch di-*klaim ulang* di web →
+status-tarik otomatis reset.
 
 **B. CLI** — `python main.py` (atau `start.bat`): sekali jalan.
 
