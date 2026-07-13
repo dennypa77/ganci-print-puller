@@ -21,9 +21,10 @@ disederhanakan untuk `.cdr` (vektor, tanpa ekstraksi halaman PDF).
 Operator membuka tiap `.cdr` sekali di CorelDRAW lalu mengatur jumlah salinan sesuai
 manifest. Pencetakan/layout tidak ditangani tool ini.
 
-> ⚠️ Tool ini **READ-ONLY** ke DB — status job tetap dipegang operator lewat web.
-> Job `in_progress` yang sama akan ikut tertarik lagi sampai operator menyelesaikannya
-> (status → `done`). Hot folder **selalu dibersihkan** tiap tarik (hanya batch terbaru).
+> Status job tetap dipegang operator lewat web; tool hanya menandai `pulled_at`.
+> **Output dipisah per BATCH**: tiap batch punya sub-folder sendiri di hot folder
+> (nama = `batch_code`, mis. `<hot>/2026-07-08-B4/`). **Tidak ada auto-hapus** —
+> file lama dibiarkan, hapus manual kalau perlu.
 
 ## Setup
 

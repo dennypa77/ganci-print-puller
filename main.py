@@ -1,22 +1,23 @@
 """Tarik antrian print GK dari ERP lalu salin file .cdr secara lokal.
 
-Dua mode:
-  * FULL   — `run_pull`: ambil SEMUA job in_progress, bersihkan hot folder, salin
-             semua .cdr. Cocok untuk 1 komputer (perilaku lama). Tidak menandai
-             status-tarik di DB.
-  * KLAIM  — `run_pull_claim`: klaim N charm BERIKUTNYA yang belum ditarik (atomik
-             di DB) → banyak komputer bisa bagi beban tanpa tumpang tindih. Menulis
-             status-tarik (pulled_at) supaya progres lintas-komputer akurat.
-             TIDAK membersihkan hot folder (menumpuk, karena ditarik bertahap).
+Output DIPISAH per BATCH: tiap batch punya sub-folder sendiri di dalam hot folder
+(nama = batch_code, mis. <hot>/2026-07-08-B4/). TIDAK ada auto-hapus — file lama
+dibiarkan (hapus manual).
 
-Keduanya TIDAK mengubah status JOB (pending/in_progress/done) — itu tetap dipegang
-operator via web. Mode KLAIM hanya menandai kolom pulled_at (status-tarik).
+Dua mode:
+  * FULL   — `run_pull`: ambil SEMUA job in_progress, salin semua. Perilaku 1
+             komputer. Tidak menandai status-tarik di DB.
+  * KLAIM  — `run_pull_claim`: klaim N charm BERIKUTNYA yang belum ditarik (atomik)
+             → banyak komputer bagi beban tanpa tumpang tindih; menandai pulled_at.
+
+Keduanya TIDAK mengubah status JOB (pending/in_progress/done) — dipegang web.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -63,14 +64,16 @@ def _client(cfg: dict) -> ErpClient:
     )
 
 
+def _safe_folder(name: str) -> str:
+    """Nama sub-folder aman untuk Windows (buang karakter ilegal)."""
+    s = re.sub(r'[<>:"/\\|?*]', "_", str(name or "tanpa-batch")).strip().rstrip(".")
+    return s or "tanpa-batch"
+
+
 def _expand_jobs(
     jobs_norm: list[dict], emit: Callable[[str], None], warnings: list[str], fails: list[str]
 ) -> dict[str, dict]:
-    """jobs_norm = [{sku, name, pcs}] → by_sku (expand bundle→anggota, konsolidasi).
-
-    Bundle (S/M/BS) → N desain anggota di ukuran itu (mis. SET-5521-5525-M →
-    GK-ATM-0005521-M .. -0005525-M). Tunggal (L) → 1 key. pcs berlaku per anggota.
-    """
+    """jobs_norm = [{sku, name, pcs}] → by_sku (expand bundle→anggota, konsolidasi)."""
     by_sku: dict[str, dict] = {}
     for j in jobs_norm:
         sku = (j.get("sku") or "").strip()
@@ -92,31 +95,16 @@ def _expand_jobs(
     return by_sku
 
 
-def _copy_by_sku(
+def _copy_group(
     by_sku: dict[str, dict],
-    cfg: dict,
+    index: dict[str, str],
+    dest_folder: str,
     emit: Callable[[str], None],
     warnings: list[str],
     fails: list[str],
-    clear_first: bool,
 ) -> dict[str, Any]:
-    """Salin 1 .cdr per key ke hot folder + tulis manifest. Return ringkasan salin."""
-    master_folder = cfg["master_folder"]
-    hot_folder = cfg["hot_folder"]
-    log_dir = os.path.join(hot_folder, "log")
-    os.makedirs(hot_folder, exist_ok=True)
-    os.makedirs(log_dir, exist_ok=True)
-    if not os.path.isdir(master_folder):
-        raise FileNotFoundError(f"FOLDER MASTER tidak ada: {master_folder}")
-
-    emit("Membuat index file master .cdr...")
-    index = duplicate.build_file_index(master_folder)
-    emit(f"Index siap: {len(index)} entri .cdr di folder master.")
-
-    if clear_first:
-        removed = duplicate.clear_hotfolder(hot_folder)
-        emit(f"Auto-bersih: {removed} file lama dihapus — folder kini hanya batch terbaru.")
-
+    """Salin 1 .cdr per key ke dest_folder + manifest. TIDAK menghapus apa pun."""
+    os.makedirs(dest_folder, exist_ok=True)
     manifest_rows: list[dict] = []
     total_pcs = 0
     ok_designs = 0
@@ -129,7 +117,7 @@ def _copy_by_sku(
             fails.append(f"SKU {disp}{origin}: file '{disp}.cdr' TIDAK ADA di folder master.")
             continue
         try:
-            dest = duplicate.copy_cdr(found, hot_folder)
+            dest = duplicate.copy_cdr(found, dest_folder)
             manifest_rows.append(
                 {"sku": disp, "name": ent["name"], "pcs": ent["pcs"], "file": os.path.basename(dest)}
             )
@@ -142,63 +130,86 @@ def _copy_by_sku(
                 f"SKU {disp}{origin}: gagal salin '{os.path.basename(found)}' "
                 f"— {type(e).__name__}: {e}\n      Trace: {tb}"
             )
-
-    ts = time.strftime("%Y-%m-%d-%H-%M-%S")
     manifest_path = None
     if manifest_rows:
-        manifest_path = duplicate.write_manifest(hot_folder, manifest_rows, ts)
-        emit(f"Manifest ditulis: {os.path.basename(manifest_path)} ({ok_designs} desain).")
+        ts = time.strftime("%Y-%m-%d-%H-%M-%S")
+        manifest_path = duplicate.write_manifest(dest_folder, manifest_rows, ts)
+        emit(
+            f"Manifest: {os.path.basename(manifest_path)} ({ok_designs} desain) "
+            f"di {os.path.basename(dest_folder)}/."
+        )
+    return {"ok_designs": ok_designs, "total_pcs": total_pcs, "manifest": manifest_path}
 
-    log_path = os.path.join(log_dir, f"run_{ts}.txt")
-    with open(log_path, "w", encoding="utf-8") as fh:
-        fh.write(f"Run {ts}\n")
-        fh.write(f"Desain unik disalin: {ok_designs} | total pcs: {total_pcs}\n\n")
-        if warnings:
-            fh.write("PERINGATAN:\n" + "\n".join(warnings) + "\n\n")
-        if fails:
-            fh.write("GAGAL:\n" + "\n".join(fails) + "\n")
 
+def _pull_grouped(
+    jobs_by_batch: dict[str, list[dict]], cfg: dict, emit: Callable[[str], None]
+) -> dict[str, Any]:
+    """Salin per BATCH → sub-folder <hot>/<batch_code>/. Index master dibangun sekali.
+    Tanpa auto-hapus."""
+    master_folder = cfg["master_folder"]
+    hot_folder = cfg["hot_folder"]
+    if not os.path.isdir(master_folder):
+        raise FileNotFoundError(f"FOLDER MASTER tidak ada: {master_folder}")
+    os.makedirs(hot_folder, exist_ok=True)
+    emit("Membuat index file master .cdr...")
+    index = duplicate.build_file_index(master_folder)
+    emit(f"Index siap: {len(index)} entri .cdr.")
+
+    warnings: list[str] = []
+    fails: list[str] = []
+    total_ok = 0
+    total_pcs = 0
+    folders: list[str] = []
+    for bc, jobs_norm in jobs_by_batch.items():
+        folder = _safe_folder(bc)
+        dest = os.path.join(hot_folder, folder)
+        emit(f"— Batch '{bc}' → folder {folder}/ —")
+        by_sku = _expand_jobs(jobs_norm, emit, warnings, fails)
+        res = _copy_group(by_sku, index, dest, emit, warnings, fails)
+        total_ok += res["ok_designs"]
+        total_pcs += res["total_pcs"]
+        folders.append(folder)
     return {
-        "ok_designs": ok_designs,
+        "ok_designs": total_ok,
         "total_pcs": total_pcs,
-        "manifest": manifest_path,
+        "batches": len(folders),
+        "folders": folders,
+        "warnings": warnings,
+        "fails": fails,
         "hot_folder": hot_folder,
     }
 
 
 def run_pull(cfg: dict, emit: Callable[[str], None] = print) -> dict[str, Any]:
-    """FULL (lama): tarik SEMUA job in_progress, bersihkan hot folder, salin semua.
-    Tidak menandai status-tarik. Cocok untuk 1 komputer."""
+    """FULL: tarik SEMUA job in_progress → salin per folder batch (tanpa auto-hapus)."""
     emit("Mengambil antrian print GK 'sedang diproses' (in_progress) dari ERP...")
     jobs = _client(cfg).fetch_active_print_jobs()
-    emit(f"Dapat {len(jobs)} job sedang diproses (in_progress).")
+    emit(f"Dapat {len(jobs)} job in_progress.")
     if not jobs:
         return {
-            "ok": True, "total_jobs": 0, "ok_designs": 0, "total_pcs": 0,
-            "warnings": [], "fails": [], "hot_folder": cfg["hot_folder"], "manifest": None,
+            "ok": True, "ok_designs": 0, "total_pcs": 0, "batches": 0, "folders": [],
+            "warnings": [], "fails": [], "hot_folder": cfg["hot_folder"],
             "message": "Tidak ada job in_progress. Klaim/Mulai batch dulu di Operator Print GK.",
         }
-    jobs_norm = [
-        {"sku": (j.get("item") or {}).get("sku"), "name": (j.get("item") or {}).get("name"),
-         "pcs": j.get("jumlah_pcs_target")}
-        for j in jobs
-    ]
-    warnings: list[str] = []
-    fails: list[str] = []
-    by_sku = _expand_jobs(jobs_norm, emit, warnings, fails)
-    res = _copy_by_sku(by_sku, cfg, emit, warnings, fails, clear_first=True)
-    msg = f"{res['ok_designs']} desain (.cdr) disalin → {res['total_pcs']} pcs total."
-    if fails:
-        msg += f" {len(fails)} gagal (cek log)."
-    return {"ok": True, "total_jobs": len(jobs), "warnings": warnings, "fails": fails, "message": msg, **res}
+    by_batch: dict[str, list[dict]] = {}
+    for j in jobs:
+        item = j.get("item") or {}
+        batch = j.get("batch") or {}
+        bc = (batch.get("batch_code") if isinstance(batch, dict) else None) or "tanpa-batch"
+        by_batch.setdefault(bc, []).append(
+            {"sku": item.get("sku"), "name": item.get("name"), "pcs": j.get("jumlah_pcs_target")}
+        )
+    res = _pull_grouped(by_batch, cfg, emit)
+    msg = f"{res['ok_designs']} desain disalin ke {res['batches']} folder batch → {res['total_pcs']} pcs."
+    if res["fails"]:
+        msg += f" {len(res['fails'])} gagal (cek log)."
+    return {"ok": True, "message": msg, **res}
 
 
 def run_pull_claim(
     cfg: dict, target_charms: int, emit: Callable[[str], None] = print, worker: str | None = None
 ) -> dict[str, Any]:
-    """KLAIM: ambil N charm BERIKUTNYA yang belum ditarik komputer mana pun (atomik),
-    lalu salin .cdr-nya (TANPA bersihkan hot folder — menumpuk). Balas ringkasan +
-    progres terbaru."""
+    """KLAIM: ambil N charm BERIKUTNYA yang belum ditarik → salin per folder batch."""
     wk = worker or worker_name(cfg)
     target = max(1, int(target_charms))
     emit(f"[{wk}] Mengklaim {target} charm berikutnya dari antrian (belum ditarik)...")
@@ -208,8 +219,8 @@ def run_pull_claim(
         prog = client.fetch_pull_progress()
         done = prog["total_charms"] > 0 and prog["pulled_charms"] >= prog["total_charms"]
         return {
-            "ok": True, "claimed_jobs": 0, "ok_designs": 0, "total_pcs": 0,
-            "warnings": [], "fails": [], "hot_folder": cfg["hot_folder"], "manifest": None,
+            "ok": True, "claimed_jobs": 0, "ok_designs": 0, "total_pcs": 0, "batches": 0,
+            "folders": [], "warnings": [], "fails": [], "hot_folder": cfg["hot_folder"],
             "progress": prog,
             "message": (
                 "Semua charm sudah ditarik (100%). Tidak ada yang tersisa."
@@ -218,26 +229,29 @@ def run_pull_claim(
             ),
         }
     claimed_charms = sum(int(c.get("charms") or 0) for c in claimed)
-    emit(f"[{wk}] Diklaim {len(claimed)} job (~{claimed_charms} charm). Menyalin .cdr...")
-    jobs_norm = [
-        {"sku": c.get("sku"), "name": c.get("item_name"), "pcs": c.get("jumlah_pcs_target")}
-        for c in claimed
-    ]
-    warnings: list[str] = []
-    fails: list[str] = []
-    by_sku = _expand_jobs(jobs_norm, emit, warnings, fails)
-    res = _copy_by_sku(by_sku, cfg, emit, warnings, fails, clear_first=False)
-    prog = client.fetch_pull_progress()
-    msg = (
-        f"Ditarik {len(claimed)} job (~{claimed_charms} charm) → {res['ok_designs']} desain disalin. "
-        f"Progres batch: {prog['pulled_charms']}/{prog['total_charms']} charm ditarik "
-        f"(sisa {max(0, prog['total_charms'] - prog['pulled_charms'])})."
+    by_batch: dict[str, list[dict]] = {}
+    for c in claimed:
+        bc = (c.get("batch_code") or "tanpa-batch")
+        by_batch.setdefault(bc, []).append(
+            {"sku": c.get("sku"), "name": c.get("item_name"), "pcs": c.get("jumlah_pcs_target")}
+        )
+    emit(
+        f"[{wk}] Diklaim {len(claimed)} job (~{claimed_charms} charm) di {len(by_batch)} batch. "
+        "Menyalin .cdr..."
     )
-    if fails:
-        msg += f" {len(fails)} gagal (cek log)."
+    res = _pull_grouped(by_batch, cfg, emit)
+    prog = client.fetch_pull_progress()
+    sisa = max(0, prog["total_charms"] - prog["pulled_charms"])
+    msg = (
+        f"Ditarik {len(claimed)} job (~{claimed_charms} charm) → {res['ok_designs']} desain di "
+        f"{res['batches']} folder batch. Progres batch: {prog['pulled_charms']}/{prog['total_charms']} "
+        f"(sisa {sisa})."
+    )
+    if res["fails"]:
+        msg += f" {len(res['fails'])} gagal (cek log)."
     return {
         "ok": True, "claimed_jobs": len(claimed), "claimed_charms": claimed_charms,
-        "warnings": warnings, "fails": fails, "progress": prog, "message": msg, **res,
+        "progress": prog, "message": msg, **res,
     }
 
 

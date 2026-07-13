@@ -34,8 +34,10 @@ class PullerApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"Ganci Print Puller — ERP  v{version.__version__}")
-        self.geometry("780x620")
-        self.minsize(680, 540)
+        # Lebar cukup supaya semua tombol baris progres (termasuk Reset) langsung
+        # kelihatan tanpa perlu melebarkan jendela manual.
+        self.geometry("1000x640")
+        self.minsize(940, 560)
         self.cfg = load_existing()
 
         self.tabs = ctk.CTkTabview(self)

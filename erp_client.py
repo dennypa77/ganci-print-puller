@@ -120,7 +120,7 @@ class ErpClient:
         """
         query = {
             "status": "eq.in_progress",
-            "select": "id,jumlah_pcs_target,item:items(sku,name)",
+            "select": "id,jumlah_pcs_target,item:items(sku,name),batch:gk_order_batches(batch_code)",
             "order": "created_at.asc",
         }
         rows = self._get("gk_print_jobs", query)
