@@ -240,8 +240,8 @@ class PullerApp(ctk.CTk):
         ).pack(side="left", padx=6)
         ctk.CTkButton(
             prog,
-            text="Reset Tarik",
-            width=100,
+            text="↺ Reset Tarik Ulang",
+            width=150,
             fg_color="#b91c1c",
             hover_color="#991b1b",
             command=self._reset_pull,
@@ -360,19 +360,51 @@ class PullerApp(ctk.CTk):
         threading.Thread(target=work, daemon=True).start()
 
     def _reset_pull(self) -> None:
-        if not messagebox.askyesno(
-            "Reset Status Tarik",
-            "Reset penanda 'sudah ditarik' untuk SEMUA batch in_progress?\n\n"
-            "Setelah ini semua charm dianggap belum ditarik (bisa ditarik ulang dari awal).\n"
-            "Status job (pending/in_progress/done) TIDAK berubah.",
-        ):
-            return
+        """Reset status-tarik: semua charm batch in_progress bisa ditarik ULANG dari
+        awal. Untuk pemulihan saat ada kesalahan pull. Ambil dulu jumlah charm-nya
+        supaya konfirmasi jelas (mis. 'reset 100 charm')."""
         cfg = self._collect()
+        if not cfg.get("vps_db_url") or not cfg.get("jwt_secret"):
+            self._emit("Setting belum lengkap — buka tab Pengaturan.")
+            return
 
         def work() -> None:
             try:
+                prog = ErpClient(
+                    cfg["vps_db_url"], cfg["jwt_secret"], cfg["jwt_role"]
+                ).fetch_pull_progress()
+            except Exception as e:  # noqa: BLE001
+                err = str(e)
+                self._emit(f"GAGAL cek progres untuk reset: {err}")
+                return
+            total = prog["total_charms"]
+            pulled = prog["pulled_charms"]
+
+            def confirm_and_reset() -> None:
+                if total == 0:
+                    messagebox.showinfo(
+                        "Reset Tarik Ulang",
+                        "Belum ada batch in_progress — tidak ada yang perlu di-reset.",
+                    )
+                    return
+                if messagebox.askyesno(
+                    "Reset Tarik Ulang",
+                    f"Batch sekarang: {total} charm, {pulled} sudah ditarik.\n\n"
+                    f"Reset agar SEMUA {total} charm bisa DITARIK ULANG dari awal?\n\n"
+                    "Pakai kalau ada kesalahan pull. Status job di web (pending/"
+                    "in_progress/done) TIDAK berubah.",
+                ):
+                    self._do_reset(cfg, total)
+
+            self.after(0, confirm_and_reset)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _do_reset(self, cfg: dict, total: int) -> None:
+        def work() -> None:
+            try:
                 ErpClient(cfg["vps_db_url"], cfg["jwt_secret"], cfg["jwt_role"]).reset_pull()
-                self._emit("Status tarik di-reset — semua charm dianggap belum ditarik.")
+                self._emit(f"✓ Reset selesai — {total} charm kini bisa ditarik ulang dari awal.")
                 self.after(0, self._refresh_progress)
             except Exception as e:  # noqa: BLE001
                 err = str(e)
