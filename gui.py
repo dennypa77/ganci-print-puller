@@ -2,7 +2,7 @@
 
 Dua tab:
   - Pengaturan: isi URL/JWT/folder + Test Koneksi + Simpan (config.json).
-  - Eksekusi & Log: "Tarik Desain & Salin" → salin 1 .cdr per desain + manifest.
+  - Eksekusi & Log: "Tarik Desain & Salin" → gandakan .cdr sebanyak pcs + manifest.
 
 Jalankan: python gui.py  (atau gui.bat)
 """

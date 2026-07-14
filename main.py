@@ -103,10 +103,12 @@ def _copy_group(
     warnings: list[str],
     fails: list[str],
 ) -> dict[str, Any]:
-    """Salin 1 .cdr per key ke dest_folder + manifest. TIDAK menghapus apa pun."""
+    """Salin .cdr per key SEBANYAK pcs-nya (file bernomor) ke dest_folder + manifest.
+    TIDAK menghapus apa pun."""
     os.makedirs(dest_folder, exist_ok=True)
     manifest_rows: list[dict] = []
     total_pcs = 0
+    total_files = 0
     ok_designs = 0
     for idx, (key, ent) in enumerate(sorted(by_sku.items()), start=1):
         disp = ent["sku"]
@@ -117,13 +119,14 @@ def _copy_group(
             fails.append(f"SKU {disp}{origin}: file '{disp}.cdr' TIDAK ADA di folder master.")
             continue
         try:
-            dest = duplicate.copy_cdr(found, dest_folder)
+            made = duplicate.copy_cdr_copies(found, dest_folder, ent["pcs"])
             manifest_rows.append(
-                {"sku": disp, "name": ent["name"], "pcs": ent["pcs"], "file": os.path.basename(dest)}
+                {"sku": disp, "name": ent["name"], "pcs": ent["pcs"], "file": f"{len(made)} file .cdr"}
             )
             total_pcs += ent["pcs"]
+            total_files += len(made)
             ok_designs += 1
-            emit(f"  [{idx:03d}] {disp}{origin} → {ent['pcs']} pcs → {os.path.basename(dest)}")
+            emit(f"  [{idx:03d}] {disp}{origin} → {ent['pcs']} pcs → {len(made)} file .cdr")
         except Exception as e:  # noqa: BLE001
             tb = traceback.format_exc().strip().replace("\n", "\n      ")
             fails.append(
@@ -135,10 +138,13 @@ def _copy_group(
         ts = time.strftime("%Y-%m-%d-%H-%M-%S")
         manifest_path = duplicate.write_manifest(dest_folder, manifest_rows, ts)
         emit(
-            f"Manifest: {os.path.basename(manifest_path)} ({ok_designs} desain) "
-            f"di {os.path.basename(dest_folder)}/."
+            f"Manifest: {os.path.basename(manifest_path)} ({ok_designs} desain, "
+            f"{total_files} file) di {os.path.basename(dest_folder)}/."
         )
-    return {"ok_designs": ok_designs, "total_pcs": total_pcs, "manifest": manifest_path}
+    return {
+        "ok_designs": ok_designs, "total_pcs": total_pcs,
+        "total_files": total_files, "manifest": manifest_path,
+    }
 
 
 def _pull_grouped(
@@ -159,6 +165,7 @@ def _pull_grouped(
     fails: list[str] = []
     total_ok = 0
     total_pcs = 0
+    total_files = 0
     folders: list[str] = []
     for bc, jobs_norm in jobs_by_batch.items():
         folder = _safe_folder(bc)
@@ -168,10 +175,12 @@ def _pull_grouped(
         res = _copy_group(by_sku, index, dest, emit, warnings, fails)
         total_ok += res["ok_designs"]
         total_pcs += res["total_pcs"]
+        total_files += res["total_files"]
         folders.append(folder)
     return {
         "ok_designs": total_ok,
         "total_pcs": total_pcs,
+        "total_files": total_files,
         "batches": len(folders),
         "folders": folders,
         "warnings": warnings,
@@ -187,8 +196,8 @@ def run_pull(cfg: dict, emit: Callable[[str], None] = print) -> dict[str, Any]:
     emit(f"Dapat {len(jobs)} job in_progress.")
     if not jobs:
         return {
-            "ok": True, "ok_designs": 0, "total_pcs": 0, "batches": 0, "folders": [],
-            "warnings": [], "fails": [], "hot_folder": cfg["hot_folder"],
+            "ok": True, "ok_designs": 0, "total_pcs": 0, "total_files": 0, "batches": 0,
+            "folders": [], "warnings": [], "fails": [], "hot_folder": cfg["hot_folder"],
             "message": "Tidak ada job in_progress. Klaim/Mulai batch dulu di Operator Print GK.",
         }
     by_batch: dict[str, list[dict]] = {}
@@ -200,7 +209,10 @@ def run_pull(cfg: dict, emit: Callable[[str], None] = print) -> dict[str, Any]:
             {"sku": item.get("sku"), "name": item.get("name"), "pcs": j.get("jumlah_pcs_target")}
         )
     res = _pull_grouped(by_batch, cfg, emit)
-    msg = f"{res['ok_designs']} desain disalin ke {res['batches']} folder batch → {res['total_pcs']} pcs."
+    msg = (
+        f"{res['total_files']} file .cdr ({res['total_pcs']} pcs, {res['ok_designs']} desain) "
+        f"disalin ke {res['batches']} folder batch."
+    )
     if res["fails"]:
         msg += f" {len(res['fails'])} gagal (cek log)."
     return {"ok": True, "message": msg, **res}
@@ -219,8 +231,8 @@ def run_pull_claim(
         prog = client.fetch_pull_progress()
         done = prog["total_charms"] > 0 and prog["pulled_charms"] >= prog["total_charms"]
         return {
-            "ok": True, "claimed_jobs": 0, "ok_designs": 0, "total_pcs": 0, "batches": 0,
-            "folders": [], "warnings": [], "fails": [], "hot_folder": cfg["hot_folder"],
+            "ok": True, "claimed_jobs": 0, "ok_designs": 0, "total_pcs": 0, "total_files": 0,
+            "batches": 0, "folders": [], "warnings": [], "fails": [], "hot_folder": cfg["hot_folder"],
             "progress": prog,
             "message": (
                 "Semua charm sudah ditarik (100%). Tidak ada yang tersisa."
@@ -243,9 +255,9 @@ def run_pull_claim(
     prog = client.fetch_pull_progress()
     sisa = max(0, prog["total_charms"] - prog["pulled_charms"])
     msg = (
-        f"Ditarik {len(claimed)} job (~{claimed_charms} charm) → {res['ok_designs']} desain di "
-        f"{res['batches']} folder batch. Progres batch: {prog['pulled_charms']}/{prog['total_charms']} "
-        f"(sisa {sisa})."
+        f"Ditarik {len(claimed)} job (~{claimed_charms} charm) → {res['total_files']} file .cdr "
+        f"({res['ok_designs']} desain) di {res['batches']} folder batch. "
+        f"Progres batch: {prog['pulled_charms']}/{prog['total_charms']} (sisa {sisa})."
     )
     if res["fails"]:
         msg += f" {len(res['fails'])} gagal (cek log)."

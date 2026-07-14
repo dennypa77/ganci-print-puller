@@ -15,11 +15,13 @@ disederhanakan untuk `.cdr` (vektor, tanpa ekstraksi halaman PDF).
 2. Tiap job sudah merujuk ke **charm L individual** (mis. `GK-ATM-0003271-L`) karena
    bundle (BS=10, M/S=5) sudah di-expand di ERP (Proses Produksi).
 3. Untuk tiap SKU charm: cari `<sku>.cdr` di `master_folder` (folder lokal — boleh
-   Google Drive yang ter-sync), salin **SATU** file ke `hot_folder`.
+   Google Drive yang ter-sync), **gandakan sebanyak `jumlah_pcs_target`** ke
+   `hot_folder` dengan nama bernomor (`<sku> (01).cdr` .. `(NN).cdr`).
 4. Tulis **manifest** (`manifest_<ts>.csv`: SKU, Nama, Jumlah Pcs, File) + log.
 
-Operator membuka tiap `.cdr` sekali di CorelDRAW lalu mengatur jumlah salinan sesuai
-manifest. Pencetakan/layout tidak ditangani tool ini.
+Jumlah file = jumlah charm yang harus dicetak, jadi operator tinggal
+**drag-and-drop semua `.cdr`** ke CorelDRAW tanpa menduplikat manual. Manifest hanya
+ringkasan. Pencetakan/layout tidak ditangani tool ini.
 
 > Status job tetap dipegang operator lewat web; tool hanya menandai `pulled_at`.
 > **Output dipisah per BATCH**: tiap batch punya sub-folder sendiri di hot folder

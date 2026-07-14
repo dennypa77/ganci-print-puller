@@ -1,9 +1,10 @@
 """Salin file desain .cdr (CorelDRAW) berdasarkan antrian print GK dari ERP.
 
-Berbeda dengan stiker (PDF, ekstraksi halaman + N salinan), GK memakai file .cdr
-vektor: SATU file per desain disalin ke hot folder, lalu jumlah produksi ditulis
-ke MANIFEST (CSV). Operator buka tiap .cdr sekali di CorelDRAW lalu atur jumlah
-sesuai manifest. Tidak ada dependency eksternal (stdlib saja).
+GK memakai file .cdr vektor: tiap desain di-GANDAKAN sebanyak jumlah pcs-nya ke
+hot folder dengan nama bernomor unik (mis. `GK-ATM-0012071-M (01).cdr` ..
+`(10).cdr`), jadi jumlah file = jumlah charm yang harus dicetak. Operator tinggal
+drag-and-drop semua file ke CorelDRAW tanpa menduplikat manual. MANIFEST (CSV)
+tetap ditulis sebagai ringkasan. Tidak ada dependency eksternal (stdlib saja).
 
 Logika index + alias ATM↔ANM diadaptasi dari build_file_index() milik
 sortir-ganci/sortir_desain.py.
@@ -143,6 +144,29 @@ def copy_cdr(src_path: str, hot_folder: str) -> str:
     dest = os.path.join(hot_folder, os.path.basename(src_path))
     shutil.copy2(src_path, dest)
     return dest
+
+
+def copy_cdr_copies(src_path: str, hot_folder: str, count: int) -> list[str]:
+    """Salin file .cdr sebanyak `count` kali dengan nama bernomor unik.
+
+    - count <= 1  → 1 salinan memakai nama asli (`<base>.cdr`).
+    - count >= 2  → `<base> (01).cdr` .. `<base> (NN).cdr` (nol-pad, mudah diurut
+                    di Explorer & di-multi-select untuk drag-drop ke CorelDRAW).
+    Overwrite kalau nama sudah ada. Return daftar basename hasil.
+    """
+    count = max(1, int(count))
+    name, ext = os.path.splitext(os.path.basename(src_path))
+    if count == 1:
+        dest = os.path.join(hot_folder, name + ext)
+        shutil.copy2(src_path, dest)
+        return [os.path.basename(dest)]
+    width = max(2, len(str(count)))
+    made: list[str] = []
+    for i in range(1, count + 1):
+        dest = os.path.join(hot_folder, f"{name} ({i:0{width}d}){ext}")
+        shutil.copy2(src_path, dest)
+        made.append(os.path.basename(dest))
+    return made
 
 
 def write_manifest(hot_folder: str, rows: Iterable[dict], ts: str) -> str:
